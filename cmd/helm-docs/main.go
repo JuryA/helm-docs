@@ -15,6 +15,8 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
+	"golang.org/x/sync/errgroup"
+
 	"cuelang.org/go/cue/cuecontext"
 	"github.com/norwoodj/helm-docs/pkg/cueutil"
 	"github.com/norwoodj/helm-docs/pkg/document"
@@ -54,6 +56,40 @@ func parallelProcessIterable(iterable interface{}, parallelism int, visitFn func
 
 	close(workChan)
 	wg.Wait()
+}
+
+func validateSchemaOutputPath(p string) (string, error) {
+	clean := filepath.Clean(p)
+	if filepath.IsAbs(clean) {
+		return "", fmt.Errorf("schema output must be a relative path without directory traversal")
+	}
+	rel, err := filepath.Rel(".", clean)
+	if err != nil || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || rel == ".." {
+		return "", fmt.Errorf("schema output must be a relative path without directory traversal")
+	}
+	return clean, nil
+}
+
+func writeSchemaFile(outPath string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+		return fmt.Errorf("creating schema directory: %w", err)
+	}
+	if err := os.WriteFile(outPath, data, 0o644); err != nil {
+		return fmt.Errorf("writing schema: %w", err)
+	}
+	return nil
+}
+
+func generateSchema(info helm.ChartDocumentationInfo) ([]byte, error) {
+	ctx := cuecontext.New()
+	data, err := cueutil.GenerateJSONSchemaFromYAML(ctx, info.ChartValues)
+	if err != nil {
+		if strings.Contains(err.Error(), "incomplete") {
+			err = fmt.Errorf("schema is incomplete: %w", err)
+		}
+		return nil, err
+	}
+	return data, nil
 }
 
 func getDocumentationParsingConfigFromArgs() (helm.ChartValuesDocumentationParsingConfig, error) {
@@ -176,13 +212,9 @@ func runSchema(_ *cobra.Command, _ []string) error {
 	outputRel := viper.GetString("schema-output-file")
 	dryRun := viper.GetBool("dry-run")
 
-	cleanOutput := filepath.Clean(outputRel)
-	if filepath.IsAbs(cleanOutput) {
-		return fmt.Errorf("schema output must be a relative path without directory traversal")
-	}
-	rel, err := filepath.Rel(".", cleanOutput)
-	if err != nil || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || rel == ".." {
-		return fmt.Errorf("schema output must be a relative path without directory traversal")
+	cleanOutput, err := validateSchemaOutputPath(outputRel)
+	if err != nil {
+		return err
 	}
 
 	parallelism := runtime.NumCPU() * 2
@@ -190,43 +222,57 @@ func runSchema(_ *cobra.Command, _ []string) error {
 		parallelism = 1
 	}
 
-	documentationInfoByChartPath, err := readDocumentationInfoByChartPath(chartSearchRoot, parallelism)
+	infoByChartPath, err := readDocumentationInfoByChartPath(chartSearchRoot, parallelism)
 	if err != nil {
 		return err
 	}
 
-	var failedMu sync.Mutex
-	var failed []string
-	recordFailure := func(chartDir, msg string, err error) {
-		failedMu.Lock()
-		failed = append(failed, chartDir)
-		failedMu.Unlock()
-		log.Warnf(msg, chartDir, err)
+	type chartErr struct {
+		chart string
+		err   error
 	}
 
-	parallelProcessIterable(documentationInfoByChartPath, parallelism, func(elem interface{}) {
-		info := documentationInfoByChartPath[elem.(string)]
-		ctx := cuecontext.New()
-		data, err := cueutil.GenerateJSONSchemaFromYAML(ctx, info.ChartValues)
-		if err != nil {
-			recordFailure(info.ChartDirectory, "schema generation failed for %s: %v", err)
-			return
-		}
-		outPath := filepath.Join(chartSearchRoot, info.ChartDirectory, cleanOutput)
-		if dryRun {
-			fmt.Printf("=== %s/%s ===\n%s\n", info.ChartDirectory, cleanOutput, string(data))
-			return
-		}
-		if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
-			recordFailure(info.ChartDirectory, "failed creating schema directory for %s: %v", err)
-			return
-		}
-		if err := os.WriteFile(outPath, data, 0644); err != nil {
-			recordFailure(info.ChartDirectory, "failed writing schema for %s: %v", err)
-		}
-	})
+	eg := errgroup.Group{}
+	eg.SetLimit(parallelism)
 
+	failCh := make(chan chartErr, len(infoByChartPath))
+	for chartDir, info := range infoByChartPath {
+		chartDir := chartDir
+		info := info
+		eg.Go(func() error {
+			data, err := generateSchema(info)
+			if err != nil {
+				failCh <- chartErr{chartDir, fmt.Errorf("schema generation failed: %w", err)}
+				log.Warnf("schema generation failed for %s: %v", chartDir, err)
+				return nil
+			}
+
+			outPath := filepath.Join(chartSearchRoot, chartDir, cleanOutput)
+			if dryRun {
+				fmt.Printf("=== %s/%s ===\n%s\n", chartDir, cleanOutput, string(data))
+				return nil
+			}
+			if err := writeSchemaFile(outPath, data); err != nil {
+				failCh <- chartErr{chartDir, err}
+				log.Warnf("failed writing schema for %s: %v", chartDir, err)
+			}
+			return nil
+		})
+	}
+
+	if err := eg.Wait(); err != nil {
+		return err
+	}
+	close(failCh)
+
+	var failed []string
+	var details []string
+	for f := range failCh {
+		failed = append(failed, f.chart)
+		details = append(details, fmt.Sprintf("%s: %v", f.chart, f.err))
+	}
 	if len(failed) > 0 {
+		log.Warn(strings.Join(details, "; "))
 		return fmt.Errorf("failed generating schema for charts: %s", strings.Join(failed, ", "))
 	}
 	return nil
