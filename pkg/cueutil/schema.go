@@ -10,9 +10,9 @@ import (
 	yamlv3 "gopkg.in/yaml.v3"
 )
 
-// GenerateJSONSchemaFromYAML is a proof-of-concept placeholder that converts a
-// YAML node to a CUE instance. Full JSON Schema generation is left as a future
-// improvement.
+// GenerateJSONSchemaFromYAML converts a YAML node to JSON Schema using CUE.
+// It normalizes the node by decoding it into generic Go values so comments and
+// other YAML metadata are discarded before CUE processing.
 func GenerateJSONSchemaFromYAML(ctx *cue.Context, node *yamlv3.Node) ([]byte, error) {
 	if node == nil {
 		return nil, fmt.Errorf("nil node")
@@ -21,7 +21,11 @@ func GenerateJSONSchemaFromYAML(ctx *cue.Context, node *yamlv3.Node) ([]byte, er
 		ctx = cuecontext.New()
 	}
 
-	data, err := yamlv3.Marshal(node)
+	var val interface{}
+	if err := node.Decode(&val); err != nil {
+		return nil, err
+	}
+	data, err := yamlv3.Marshal(val)
 	if err != nil {
 		return nil, err
 	}

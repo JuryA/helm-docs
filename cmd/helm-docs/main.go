@@ -174,6 +174,12 @@ func runSchema(_ *cobra.Command, _ []string) error {
 
 	chartSearchRoot := viper.GetString("chart-search-root")
 	outputRel := viper.GetString("schema-output-file")
+	dryRun := viper.GetBool("dry-run")
+
+	cleanOutput := filepath.Clean(outputRel)
+	if filepath.IsAbs(cleanOutput) || strings.HasPrefix(cleanOutput, "..") {
+		return fmt.Errorf("schema output must be a relative path without directory traversal")
+	}
 
 	ctx := cuecontext.New()
 
@@ -190,7 +196,11 @@ func runSchema(_ *cobra.Command, _ []string) error {
 			log.Warnf("schema generation failed for %s: %v", info.ChartDirectory, err)
 			continue
 		}
-		outPath := filepath.Join(chartSearchRoot, info.ChartDirectory, outputRel)
+		outPath := filepath.Join(chartSearchRoot, info.ChartDirectory, cleanOutput)
+		if dryRun {
+			fmt.Printf("=== %s/%s ===\n%s\n", info.ChartDirectory, cleanOutput, string(data))
+			continue
+		}
 		if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
 			failed = append(failed, info.ChartDirectory)
 			log.Warnf("failed creating schema directory for %s: %v", info.ChartDirectory, err)
