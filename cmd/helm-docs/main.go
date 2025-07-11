@@ -185,8 +185,6 @@ func runSchema(_ *cobra.Command, _ []string) error {
 		return fmt.Errorf("schema output must be a relative path without directory traversal")
 	}
 
-	ctx := cuecontext.New()
-
 	parallelism := runtime.NumCPU() * 2
 	if dryRun {
 		parallelism = 1
@@ -199,15 +197,19 @@ func runSchema(_ *cobra.Command, _ []string) error {
 
 	var failedMu sync.Mutex
 	var failed []string
+	recordFailure := func(chartDir, msg string, err error) {
+		failedMu.Lock()
+		failed = append(failed, chartDir)
+		failedMu.Unlock()
+		log.Warnf(msg, chartDir, err)
+	}
 
 	parallelProcessIterable(documentationInfoByChartPath, parallelism, func(elem interface{}) {
 		info := documentationInfoByChartPath[elem.(string)]
+		ctx := cuecontext.New()
 		data, err := cueutil.GenerateJSONSchemaFromYAML(ctx, info.ChartValues)
 		if err != nil {
-			failedMu.Lock()
-			failed = append(failed, info.ChartDirectory)
-			failedMu.Unlock()
-			log.Warnf("schema generation failed for %s: %v", info.ChartDirectory, err)
+			recordFailure(info.ChartDirectory, "schema generation failed for %s: %v", err)
 			return
 		}
 		outPath := filepath.Join(chartSearchRoot, info.ChartDirectory, cleanOutput)
@@ -216,17 +218,11 @@ func runSchema(_ *cobra.Command, _ []string) error {
 			return
 		}
 		if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
-			failedMu.Lock()
-			failed = append(failed, info.ChartDirectory)
-			failedMu.Unlock()
-			log.Warnf("failed creating schema directory for %s: %v", info.ChartDirectory, err)
+			recordFailure(info.ChartDirectory, "failed creating schema directory for %s: %v", err)
 			return
 		}
 		if err := os.WriteFile(outPath, data, 0644); err != nil {
-			failedMu.Lock()
-			failed = append(failed, info.ChartDirectory)
-			failedMu.Unlock()
-			log.Warnf("failed writing schema for %s: %v", info.ChartDirectory, err)
+			recordFailure(info.ChartDirectory, "failed writing schema for %s: %v", err)
 		}
 	})
 

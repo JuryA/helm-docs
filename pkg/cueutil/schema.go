@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"cuelang.org/go/cue"
-	"cuelang.org/go/cue/cuecontext"
 	"cuelang.org/go/encoding/jsonschema"
 	cueyaml "cuelang.org/go/encoding/yaml"
 	yamlv3 "gopkg.in/yaml.v3"
@@ -12,13 +11,14 @@ import (
 
 // GenerateJSONSchemaFromYAML converts a YAML node to JSON Schema using CUE.
 // It normalizes the node by decoding it into generic Go values so comments and
-// other YAML metadata are discarded before CUE processing.
+// other YAML metadata are discarded before CUE processing. The ctx parameter
+// must be non-nil.
 func GenerateJSONSchemaFromYAML(ctx *cue.Context, node *yamlv3.Node) ([]byte, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("nil cue.Context")
+	}
 	if node == nil {
 		return nil, fmt.Errorf("nil node")
-	}
-	if ctx == nil {
-		ctx = cuecontext.New()
 	}
 
 	var val interface{}
