@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
+	"github.com/norwoodj/helm-docs/pkg/cueutil"
 	"github.com/norwoodj/helm-docs/pkg/document"
 	"github.com/norwoodj/helm-docs/pkg/helm"
 )
@@ -165,6 +166,38 @@ func writeDocumentation(chartSearchRoot string, documentationInfoByChartPath map
 		}
 		document.PrintDocumentation(info, chartSearchRoot, templateFiles, dryRun, version, badgeStyle, dependencyValues, skipVersionFooter)
 	})
+}
+
+func runSchema(_ *cobra.Command, _ []string) error {
+	initializeCli()
+
+	chartSearchRoot := viper.GetString("chart-search-root")
+	outputRel := viper.GetString("schema-output-file")
+
+	documentationInfoByChartPath, err := readDocumentationInfoByChartPath(chartSearchRoot, 1)
+	if err != nil {
+		return err
+	}
+
+	var failed []string
+	for _, info := range documentationInfoByChartPath {
+		data, err := cueutil.GenerateJSONSchemaFromYAML(info.ChartValues)
+		if err != nil {
+			failed = append(failed, info.ChartDirectory)
+			log.Warnf("schema generation failed for %s: %v", info.ChartDirectory, err)
+			continue
+		}
+		outPath := filepath.Join(chartSearchRoot, info.ChartDirectory, outputRel)
+		if err := os.WriteFile(outPath, data, 0644); err != nil {
+			failed = append(failed, info.ChartDirectory)
+			log.Warnf("failed writing schema for %s: %v", info.ChartDirectory, err)
+		}
+	}
+
+	if len(failed) > 0 {
+		return fmt.Errorf("failed generating schema for charts: %s", strings.Join(failed, ", "))
+	}
+	return nil
 }
 
 func helmDocs(_ *cobra.Command, _ []string) {
