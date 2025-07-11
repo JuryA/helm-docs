@@ -22,7 +22,9 @@ func GenerateJSONSchemaFromYAML(node *yamlv3.Node) ([]byte, error) {
 	if err := enc.Encode(node); err != nil {
 		return nil, err
 	}
-	enc.Close()
+	if err := enc.Close(); err != nil {
+		return nil, err
+	}
 
 	ctx := cuecontext.New()
 	if _, err := cueyaml.Extract("values.yaml", buf.Bytes()); err != nil {
