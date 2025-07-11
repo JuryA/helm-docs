@@ -43,6 +43,13 @@ func newHelmDocsCommand(run func(cmd *cobra.Command, args []string)) (*cobra.Com
 		Run:     run,
 	}
 
+	schemaCmd := &cobra.Command{
+		Use:   "schema",
+		Short: "generate JSON schema using CUE (experimental)",
+		RunE:  runSchema,
+	}
+	command.AddCommand(schemaCmd)
+
 	logLevelUsage := fmt.Sprintf("Level of logs that should printed, one of (%s)", strings.Join(possibleLogLevels(), ", "))
 	command.PersistentFlags().StringP("chart-search-root", "c", ".", "directory to search recursively within for charts")
 	command.PersistentFlags().BoolP("dry-run", "d", false, "don't actually render any markdown files just print to stdout passed")
