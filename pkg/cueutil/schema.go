@@ -1,6 +1,7 @@
 package cueutil
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -16,6 +17,45 @@ import (
 
 // ErrIncompleteSchema indicates the values used to generate the schema were incomplete.
 var ErrIncompleteSchema = errors.New("incomplete schema")
+
+func inferSchema(val interface{}) map[string]interface{} {
+	switch v := val.(type) {
+	case map[string]interface{}:
+		props := make(map[string]interface{}, len(v))
+		for k, elem := range v {
+			props[k] = inferSchema(elem)
+		}
+		return map[string]interface{}{
+			"type":       "object",
+			"properties": props,
+		}
+	case []interface{}:
+		schema := map[string]interface{}{
+			"type": "array",
+		}
+		if len(v) > 0 {
+			schema["items"] = inferSchema(v[0])
+		}
+		return schema
+	case string:
+		return map[string]interface{}{"type": "string"}
+	case bool:
+		return map[string]interface{}{"type": "boolean"}
+	case int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64,
+		float32, float64, json.Number:
+		return map[string]interface{}{"type": "number"}
+	case nil:
+		return map[string]interface{}{"type": "null"}
+	default:
+		return map[string]interface{}{"type": "string"}
+	}
+}
+
+func fallbackJSONSchema(val interface{}) ([]byte, error) {
+	schema := inferSchema(val)
+	return json.MarshalIndent(schema, "", "  ")
+}
 
 func logCueValue(msg string, v cue.Value) {
 	if !log.IsLevelEnabled(log.DebugLevel) {
@@ -77,7 +117,8 @@ func GenerateJSONSchemaFromYAML(ctx *cue.Context, node *yamlv3.Node) ([]byte, er
 	if err := schemaVal.Validate(); err != nil {
 		logCueValue("generated schema CUE", schemaVal)
 		if strings.Contains(err.Error(), "incomplete") {
-			return nil, fmt.Errorf("%w: %v", ErrIncompleteSchema, err)
+			log.Debug("falling back to naive schema inference")
+			return fallbackJSONSchema(val)
 		}
 		return nil, err
 	}
@@ -86,7 +127,8 @@ func GenerateJSONSchemaFromYAML(ctx *cue.Context, node *yamlv3.Node) ([]byte, er
 	if err != nil {
 		logCueValue("generated schema CUE", schemaVal)
 		if strings.Contains(err.Error(), "incomplete") {
-			return nil, fmt.Errorf("%w: %v", ErrIncompleteSchema, err)
+			log.Debug("falling back to naive schema inference")
+			return fallbackJSONSchema(val)
 		}
 		return nil, err
 	}
