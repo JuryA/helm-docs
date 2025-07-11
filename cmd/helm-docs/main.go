@@ -177,40 +177,58 @@ func runSchema(_ *cobra.Command, _ []string) error {
 	dryRun := viper.GetBool("dry-run")
 
 	cleanOutput := filepath.Clean(outputRel)
-	if filepath.IsAbs(cleanOutput) || strings.HasPrefix(cleanOutput, "..") {
+	if filepath.IsAbs(cleanOutput) {
+		return fmt.Errorf("schema output must be a relative path without directory traversal")
+	}
+	rel, err := filepath.Rel(".", cleanOutput)
+	if err != nil || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || rel == ".." {
 		return fmt.Errorf("schema output must be a relative path without directory traversal")
 	}
 
 	ctx := cuecontext.New()
 
-	documentationInfoByChartPath, err := readDocumentationInfoByChartPath(chartSearchRoot, 1)
+	parallelism := runtime.NumCPU() * 2
+	if dryRun {
+		parallelism = 1
+	}
+
+	documentationInfoByChartPath, err := readDocumentationInfoByChartPath(chartSearchRoot, parallelism)
 	if err != nil {
 		return err
 	}
 
+	var failedMu sync.Mutex
 	var failed []string
-	for _, info := range documentationInfoByChartPath {
+
+	parallelProcessIterable(documentationInfoByChartPath, parallelism, func(elem interface{}) {
+		info := documentationInfoByChartPath[elem.(string)]
 		data, err := cueutil.GenerateJSONSchemaFromYAML(ctx, info.ChartValues)
 		if err != nil {
+			failedMu.Lock()
 			failed = append(failed, info.ChartDirectory)
+			failedMu.Unlock()
 			log.Warnf("schema generation failed for %s: %v", info.ChartDirectory, err)
-			continue
+			return
 		}
 		outPath := filepath.Join(chartSearchRoot, info.ChartDirectory, cleanOutput)
 		if dryRun {
 			fmt.Printf("=== %s/%s ===\n%s\n", info.ChartDirectory, cleanOutput, string(data))
-			continue
+			return
 		}
 		if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
+			failedMu.Lock()
 			failed = append(failed, info.ChartDirectory)
+			failedMu.Unlock()
 			log.Warnf("failed creating schema directory for %s: %v", info.ChartDirectory, err)
-			continue
+			return
 		}
 		if err := os.WriteFile(outPath, data, 0644); err != nil {
+			failedMu.Lock()
 			failed = append(failed, info.ChartDirectory)
+			failedMu.Unlock()
 			log.Warnf("failed writing schema for %s: %v", info.ChartDirectory, err)
 		}
-	}
+	})
 
 	if len(failed) > 0 {
 		return fmt.Errorf("failed generating schema for charts: %s", strings.Join(failed, ", "))
