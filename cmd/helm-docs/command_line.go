@@ -43,6 +43,15 @@ func newHelmDocsCommand(run func(cmd *cobra.Command, args []string)) (*cobra.Com
 		Run:     run,
 	}
 
+	schemaCmd := &cobra.Command{
+		Use:   "schema",
+		Short: "generate JSON schema using CUE (experimental)",
+		RunE:  runSchema,
+	}
+	schemaCmd.Flags().StringP("output", "O", "values.schema.json", "schema file path relative to each chart directory")
+	_ = viper.BindPFlag("schema-output-file", schemaCmd.Flags().Lookup("output"))
+	command.AddCommand(schemaCmd)
+
 	logLevelUsage := fmt.Sprintf("Level of logs that should printed, one of (%s)", strings.Join(possibleLogLevels(), ", "))
 	command.PersistentFlags().StringP("chart-search-root", "c", ".", "directory to search recursively within for charts")
 	command.PersistentFlags().BoolP("dry-run", "d", false, "don't actually render any markdown files just print to stdout passed")
