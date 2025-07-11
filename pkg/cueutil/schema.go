@@ -27,12 +27,12 @@ func GenerateJSONSchemaFromYAML(node *yamlv3.Node) ([]byte, error) {
 	}
 
 	ctx := cuecontext.New()
-	if _, err := cueyaml.Extract("values.yaml", buf.Bytes()); err != nil {
-		return nil, err
+	cueValue, err := cueyaml.Extract("values.yaml", buf.Bytes())
+	if err != nil {
+		return nil, nil, err
 	}
-	_ = ctx // ctx is unused currently; placeholder for future processing
 
 	// TODO: use encoding/jsonschema to generate JSON schema from the CUE value.
-	// For now, just return the original YAML as a demonstration of CUE parsing.
-	return buf.Bytes(), nil
+	// For now, return the original YAML and the parsed CUE value as a demonstration of CUE parsing.
+	return buf.Bytes(), cueValue, nil
 }
