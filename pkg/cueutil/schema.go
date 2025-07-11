@@ -1,13 +1,18 @@
 package cueutil
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 
 	"cuelang.org/go/cue"
 	"cuelang.org/go/encoding/jsonschema"
 	cueyaml "cuelang.org/go/encoding/yaml"
 	yamlv3 "gopkg.in/yaml.v3"
 )
+
+// ErrIncompleteSchema indicates the values used to generate the schema were incomplete.
+var ErrIncompleteSchema = errors.New("incomplete schema")
 
 // GenerateJSONSchemaFromYAML converts a YAML node to JSON Schema using CUE.
 // It normalizes the node by decoding it into generic Go values so comments and
@@ -50,8 +55,18 @@ func GenerateJSONSchemaFromYAML(ctx *cue.Context, node *yamlv3.Node) ([]byte, er
 		return nil, err
 	}
 
+	if err := schemaVal.Validate(); err != nil {
+		if strings.Contains(err.Error(), "incomplete") {
+			return nil, fmt.Errorf("%w: %v", ErrIncompleteSchema, err)
+		}
+		return nil, err
+	}
+
 	out, err := schemaVal.MarshalJSON()
 	if err != nil {
+		if strings.Contains(err.Error(), "incomplete") {
+			return nil, fmt.Errorf("%w: %v", ErrIncompleteSchema, err)
+		}
 		return nil, err
 	}
 	return out, nil

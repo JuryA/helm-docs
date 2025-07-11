@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -70,6 +72,16 @@ func validateSchemaOutputPath(p string) (string, error) {
 	return clean, nil
 }
 
+func joinChartOutputPath(chartRoot, chartDir, cleanOutput string) (string, error) {
+	base := filepath.Join(chartRoot, chartDir)
+	out := filepath.Join(base, cleanOutput)
+	rel, err := filepath.Rel(base, out)
+	if err != nil || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || rel == ".." {
+		return "", fmt.Errorf("resolved output path escapes chart directory")
+	}
+	return out, nil
+}
+
 func writeSchemaFile(outPath string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
 		return fmt.Errorf("creating schema directory: %w", err)
@@ -84,7 +96,7 @@ func generateSchema(info helm.ChartDocumentationInfo) ([]byte, error) {
 	ctx := cuecontext.New()
 	data, err := cueutil.GenerateJSONSchemaFromYAML(ctx, info.ChartValues)
 	if err != nil {
-		if strings.Contains(err.Error(), "incomplete") {
+		if errors.Is(err, cueutil.ErrIncompleteSchema) {
 			err = fmt.Errorf("schema is incomplete: %w", err)
 		}
 		return nil, err
@@ -232,7 +244,7 @@ func runSchema(_ *cobra.Command, _ []string) error {
 		err   error
 	}
 
-	eg := errgroup.Group{}
+	eg, ctx := errgroup.WithContext(context.Background())
 	eg.SetLimit(parallelism)
 
 	failCh := make(chan chartErr, len(infoByChartPath))
@@ -240,14 +252,25 @@ func runSchema(_ *cobra.Command, _ []string) error {
 		chartDir := chartDir
 		info := info
 		eg.Go(func() error {
-			data, err := generateSchema(info)
-			if err != nil {
-				failCh <- chartErr{chartDir, fmt.Errorf("schema generation failed: %w", err)}
-				log.Warnf("schema generation failed for %s: %v", chartDir, err)
-				return nil
+			if ctx.Err() != nil {
+				return ctx.Err()
 			}
 
-			outPath := filepath.Join(chartSearchRoot, chartDir, cleanOutput)
+			data, err := generateSchema(info)
+			if err != nil {
+				ce := fmt.Errorf("schema generation failed: %w", err)
+				failCh <- chartErr{chartDir, ce}
+				log.Warnf("schema generation failed for %s: %v", chartDir, err)
+				return ce
+			}
+
+			outPath, err := joinChartOutputPath(chartSearchRoot, chartDir, cleanOutput)
+			if err != nil {
+				failCh <- chartErr{chartDir, err}
+				log.Warnf("invalid output path for %s: %v", chartDir, err)
+				return err
+			}
+
 			if dryRun {
 				fmt.Printf("=== %s/%s ===\n%s\n", chartDir, cleanOutput, string(data))
 				return nil
@@ -255,14 +278,13 @@ func runSchema(_ *cobra.Command, _ []string) error {
 			if err := writeSchemaFile(outPath, data); err != nil {
 				failCh <- chartErr{chartDir, err}
 				log.Warnf("failed writing schema for %s: %v", chartDir, err)
+				return err
 			}
 			return nil
 		})
 	}
 
-	if err := eg.Wait(); err != nil {
-		return err
-	}
+	_ = eg.Wait()
 	close(failCh)
 
 	var failed []string
