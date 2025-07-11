@@ -1,9 +1,9 @@
 package cueutil
 
 import (
-	"bytes"
 	"fmt"
 
+	"cuelang.org/go/cue"
 	"cuelang.org/go/cue/cuecontext"
 	"cuelang.org/go/encoding/jsonschema"
 	cueyaml "cuelang.org/go/encoding/yaml"
@@ -13,22 +13,20 @@ import (
 // GenerateJSONSchemaFromYAML is a proof-of-concept placeholder that converts a
 // YAML node to a CUE instance. Full JSON Schema generation is left as a future
 // improvement.
-func GenerateJSONSchemaFromYAML(node *yamlv3.Node) ([]byte, error) {
+func GenerateJSONSchemaFromYAML(ctx *cue.Context, node *yamlv3.Node) ([]byte, error) {
 	if node == nil {
 		return nil, fmt.Errorf("nil node")
 	}
-
-	var buf bytes.Buffer
-	enc := yamlv3.NewEncoder(&buf)
-	if err := enc.Encode(node); err != nil {
-		return nil, err
-	}
-	if err := enc.Close(); err != nil {
-		return nil, err
+	if ctx == nil {
+		ctx = cuecontext.New()
 	}
 
-	ctx := cuecontext.New()
-	astFile, err := cueyaml.Extract("values.yaml", buf.Bytes())
+	data, err := yamlv3.Marshal(node)
+	if err != nil {
+		return nil, err
+	}
+
+	astFile, err := cueyaml.Extract("values.yaml", data)
 	if err != nil {
 		return nil, err
 	}

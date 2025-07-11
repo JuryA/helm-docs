@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
+	"cuelang.org/go/cue/cuecontext"
 	"github.com/norwoodj/helm-docs/pkg/cueutil"
 	"github.com/norwoodj/helm-docs/pkg/document"
 	"github.com/norwoodj/helm-docs/pkg/helm"
@@ -174,6 +175,8 @@ func runSchema(_ *cobra.Command, _ []string) error {
 	chartSearchRoot := viper.GetString("chart-search-root")
 	outputRel := viper.GetString("schema-output-file")
 
+	ctx := cuecontext.New()
+
 	documentationInfoByChartPath, err := readDocumentationInfoByChartPath(chartSearchRoot, 1)
 	if err != nil {
 		return err
@@ -181,13 +184,18 @@ func runSchema(_ *cobra.Command, _ []string) error {
 
 	var failed []string
 	for _, info := range documentationInfoByChartPath {
-		data, err := cueutil.GenerateJSONSchemaFromYAML(info.ChartValues)
+		data, err := cueutil.GenerateJSONSchemaFromYAML(ctx, info.ChartValues)
 		if err != nil {
 			failed = append(failed, info.ChartDirectory)
 			log.Warnf("schema generation failed for %s: %v", info.ChartDirectory, err)
 			continue
 		}
 		outPath := filepath.Join(chartSearchRoot, info.ChartDirectory, outputRel)
+		if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
+			failed = append(failed, info.ChartDirectory)
+			log.Warnf("failed creating schema directory for %s: %v", info.ChartDirectory, err)
+			continue
+		}
 		if err := os.WriteFile(outPath, data, 0644); err != nil {
 			failed = append(failed, info.ChartDirectory)
 			log.Warnf("failed writing schema for %s: %v", info.ChartDirectory, err)
